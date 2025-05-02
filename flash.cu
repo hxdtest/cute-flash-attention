@@ -11,10 +11,12 @@ __global__ void flash_forward(void* output, const void* q, const void* k,
                               int k_len, float sm_scale) {
   using namespace cute;
   using X = Underscore;
+  // 获取当前block的 id
   const int m_block = blockIdx.x;
-  const int base_id = blockIdx.y;
+  const int base_id = blockIdx.y; // y 方向
+  // 获取 thread 在 block中的idx 
   const int tidx = threadIdx.x;
-
+  // 在config中配置了矩阵乘法的各个元素
   using T = typename config::T;
   using SmemLayoutQ = typename config::SmemLayoutQ;
   using SmemLayoutK = typename config::SmemLayoutKV;
@@ -38,8 +40,9 @@ __global__ void flash_forward(void* output, const void* q, const void* k,
   auto k_shm = q_shm + cosize(SmemLayoutQ{});
   auto v_shm = k_shm + cosize(SmemLayoutK{});
 
-  const int bs_head_offset = base_id * head_stride;
-
+  const int bs_head_offset = base_id * head_stride; # 获取所属的head
+  # 全局的tensor 
+  
   auto Q = make_tensor(make_gmem_ptr<half_t>((T*)q + bs_head_offset),
                        make_shape(q_len, Int<kHeadDim>{}),
                        make_stride(Int<kHeadDim>{}, Int<1>{}));
@@ -52,7 +55,9 @@ __global__ void flash_forward(void* output, const void* q, const void* k,
   auto O = make_tensor(make_gmem_ptr<half_t>((T*)output + bs_head_offset),
                        make_shape(q_len, Int<kHeadDim>{}),
                        make_stride(Int<kHeadDim>{}, Int<1>{}));
-
+  // 拆分成 kblockM kHeadDim的shape 
+  // 获取 全部 的
+  // 仅仅获取一部分？
   auto gQ = local_tile(Q, make_tile(Int<kBlockM>{}, Int<kHeadDim>{}),
                        make_coord(m_block, _));
   auto gK = local_tile(K, make_tile(Int<kBlockN>{}, Int<kHeadDim>{}),
@@ -393,22 +398,25 @@ struct FlashConfig {
 }  // namespace config
 
 torch::Tensor forward(torch::Tensor q, torch::Tensor k, torch::Tensor v) {
+  // bs, num_head, seq_length, head_dim
+  // 0 , 1       , 2         , 3 
   int bs = q.size(0);
   int head_num = q.size(1);
   int q_len = q.size(2);
   int head_dim = q.size(3);
   int k_len = k.size(2);
-
   int head_stride = q.stride(1);
-
+  // head 维度增加1，在连续内存上变更的元素数量
   auto out = torch::empty_like(q);
-
+  // softmax 缩放因子 
   float sm_scale = 1.0 / sqrt(head_dim) * M_LOG2E;
-
   // only for head_dim=64
   config::FlashConfig<cute::half_t> config;
   dim3 block = config.kThreadNum;
+  // Q在 sequence 维度是可以独立拆分的，每个batch的每个head是可以独立拆分的
   dim3 grid((q_len + config.kBlockM - 1) / config.kBlockM, bs * head_num);
+  // bs * head_num 
+  // q_len // 
   int shm_size = config.kShmSize;
   auto partition_kernel = flash_forward<decltype(config)>;
   cudaFuncSetAttribute(partition_kernel,
